@@ -167,6 +167,7 @@ class MissingMetadataError(KeyError):
     """
     Raised when a given metadata is not available.
     """
+
     def __init__(self, metadata):
         # pylint: disable=super-init-not-called
         self.metadata = metadata
@@ -528,7 +529,7 @@ class TxtEventParser(EventParserBase):
             # If there are more fields to match, use the first ":" or spaces as
             # separator, otherwise just consume everything
             if fields:
-                fields =  fr' *:? *{fields}'
+                fields = fr' *:? *{fields}'
 
             fields = r'(?P<{pos}>.*?){fields}$'.format(pos=positional_field, fields=fields, **cls.PARSER_REGEX_TERMINALS)
 
@@ -544,6 +545,7 @@ class TxtEventParser(EventParserBase):
         """
         blank = cls.PARSER_REGEX_TERMINALS['blank']
         regex_map = dict(
+            __origin=r'[^:]+',
             __comm=r'.+',
             __pid=cls.PARSER_REGEX_TERMINALS['integer'],
             __cpu=cls.PARSER_REGEX_TERMINALS['integer'],
@@ -564,7 +566,7 @@ class TxtEventParser(EventParserBase):
             if field in ('__timestamp', '__event')
         )
 
-        regex = r'^{blank}{__comm}-{__pid}{blank}\[{__cpu}\]{blank}{__timestamp}:{blank}{__event}:'.format(**compos, blank=blank)
+        regex = r'(?: *{__origin}:)?{blank}{__comm}-{__pid}{blank}\[{__cpu}\]{blank}{__timestamp}:{blank}{__event}:'.format(**compos, blank=blank)
         return regex
 
     def _get_regex(self, event, fields, positional_field, greedy_field):
@@ -592,6 +594,7 @@ class PrintTxtEventParser(TxtEventParser):
         ``bprint`` is just impossible to parse in raw format, since the data to
         interpolate the format string with are not displayed by ``trace-cmd``.
     """
+
     def __init__(self, event, func_field, content_field):
         fields = {
             func_field: 'string',
@@ -646,6 +649,7 @@ class CustomFieldsTxtEventParser(TxtEventParser):
         get the string instead of the pointer.
     :type raw: bool
     """
+
     def __init__(self, event, fields_regex, fields, raw):
         self._fields_regex = fields_regex
         super().__init__(event=event, fields=fields, raw=raw)
@@ -698,6 +702,7 @@ class TxtTraceParserBase(TraceParserBase):
     """
 
     HEADER_FIELDS = {
+        '__origin': 'string',
         '__comm': 'string',
         '__pid': 'uint32',
         '__cpu': 'uint32',
@@ -798,7 +803,6 @@ class TxtTraceParserBase(TraceParserBase):
         }
         self._event_parsers = event_parsers
 
-
     @classmethod
     def _resolve_event_parsers(cls, event_parsers, default_event_parser_cls):
         default_event_parser_cls = default_event_parser_cls or cls.DEFAULT_EVENT_PARSER_CLS
@@ -818,7 +822,6 @@ class TxtTraceParserBase(TraceParserBase):
         }
 
         return (default_event_parser_cls, event_parsers)
-
 
     @PartialInit.factory
     @kwargs_forwarded_to(__init__, ignore=['lines'])
@@ -915,9 +918,9 @@ class TxtTraceParserBase(TraceParserBase):
         skel_search = skeleton_regex.search
         if time_is_provided:
             lines = zip(time, lines)
-            drop_filter = lambda line: not skel_search(line[1])
+            def drop_filter(line): return not skel_search(line[1])
         else:
-            drop_filter = lambda line: not skel_search(line)
+            def drop_filter(line): return not skel_search(line)
 
         # First, get rid of all the lines coming before the trace
         lines = itertools.dropwhile(drop_filter, lines)
@@ -977,7 +980,7 @@ class TxtTraceParserBase(TraceParserBase):
                 else:
                     # Otherwise, make sure "event" is defined so that we only
                     # go a match failure on "time"
-                    event # pylint: disable=pointless-statement
+                    event  # pylint: disable=pointless-statement
             # The line did not match the skeleton regex, so skip it
             except TypeError:
                 if b'EVENTS DROPPED' in line:
@@ -1251,6 +1254,7 @@ class TxtTraceParserBase(TraceParserBase):
         except KeyError:
             return super().get_metadata(key)
 
+
 class TxtTraceParser(TxtTraceParserBase):
     """
     Text trace parser for the raw output of ``trace-cmd report -R trace.dat``.
@@ -1322,13 +1326,15 @@ class TxtTraceParser(TxtTraceParserBase):
         ),
         'funcgraph_entry': dict(
             fields={
-                'func': _KERNEL_DTYPE['pointer'],
+                # 'func': _KERNEL_DTYPE['pointer'],
+                'func': 'string',
                 'depth': 'uint16',
             },
         ),
         'funcgraph_exit': dict(
             fields={
-                'func': _KERNEL_DTYPE['pointer'],
+                # 'func': _KERNEL_DTYPE['pointer'],
+                'func': 'string',
                 'depth': 'uint16',
                 'overrun': 'bool',
                 'calltime': 'uint64',
@@ -1566,6 +1572,7 @@ class TxtTraceParser(TxtTraceParserBase):
             be reused in another context (cached on disk), and the set of
             events in a :class:`Trace` object can be expanded dynamically.
         """
+
         if not os.path.exists(path):
             raise FileNotFoundError(f'Unable to locate specified trace file: {path}')
 
@@ -1594,7 +1601,7 @@ class TxtTraceParser(TxtTraceParserBase):
         kernel_events = {
             event.split(':', 1)[1]
             for event in subprocess.check_output(
-                ['trace-cmd', 'report', '-N', '-E', '--', path],
+                ['trace-cmd', 'report', '-q', '-E', '--', path],
                 stderr=subprocess.DEVNULL,
                 universal_newlines=True,
             ).splitlines()
@@ -1614,7 +1621,7 @@ class TxtTraceParser(TxtTraceParserBase):
             symbols_address = dict(
                 parse(line)
                 for line in subprocess.check_output(
-                    ['trace-cmd', 'report', '-N', '-f', '--', path],
+                    ['trace-cmd', 'report', '-q', '-f', '--', path],
                     stderr=subprocess.DEVNULL,
                     universal_newlines=True,
                 ).splitlines()
@@ -1628,7 +1635,7 @@ class TxtTraceParser(TxtTraceParserBase):
         if 'cpus-count' in needed_metadata:
             regex = re.compile(rb'cpus=(?P<cpus>\d+)')
             with subprocess.Popen(
-                ['trace-cmd', 'report', '-N', '--', path],
+                ['trace-cmd', 'report', '--', path],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
             ) as p:
@@ -1649,14 +1656,104 @@ class TxtTraceParser(TxtTraceParserBase):
         cmd = [
             'trace-cmd',
             'report',
-            # Do not load any plugin, so that we get fully reproducible results
-            '-N',
             # Full accuracy on timestamp
             '-t',
             # All events in raw format
             *raw_events,
             '--', path
         ]
+        # A fairly large buffer reduces the interaction overhead
+        bufsize = 10 * 1024 * 1024
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=bufsize) as p:
+            # Consume the lines as they come straight from the stdout object to
+            # avoid the memory overhead of storing the whole output in one
+            # gigantic string
+            return cls(lines=p.stdout, **kwargs)
+
+    @PartialInit.factory
+    @kwargs_forwarded_to(TxtTraceParserBase.__init__, ignore=['lines'])
+    def from_host_guest_dat(cls, path, events, guest_path=None, needed_metadata=None, event_parsers=None, default_event_parser_cls=None, **kwargs):
+        """
+        Build an instance from a path to a trace.dat file created with
+        ``trace-cmd``.
+
+        :Variable keyword arguments: Forwarded to ``__init__``
+
+        .. note:: We unfortunately cannot use ``-F`` filter option to
+            pre-filter on some events, since global timestamp deduplication has
+            to happen. The returned dataframe must be stable, because it could
+            be reused in another context (cached on disk), and the set of
+            events in a :class:`Trace` object can be expanded dynamically.
+        """
+
+        host_path = path
+
+        if not os.path.exists(host_path):
+            raise FileNotFoundError(f'Unable to locate specified host trace file: {host_path}')
+
+        if not os.path.exists(guest_path):
+            raise FileNotFoundError(f'Unable to locate specified guest trace file: {guest_path}')
+
+        needed_metadata = set(needed_metadata or [])
+        events = set(events)
+        default_event_parser_cls, event_parsers = cls._resolve_event_parsers(event_parsers, default_event_parser_cls)
+
+        def use_raw(event):
+            try:
+                parser = event_parsers[event]
+            except KeyError:
+                # If we don't have a known parser, use the raw output by
+                # default, since it will be either the same as human readable,
+                # or unparseable without a dedicated parser.
+                return True
+            else:
+                return parser.raw
+
+        raw_events = list(itertools.chain.from_iterable(
+            ('-r', event) if use_raw(event) else []
+            for event in events
+        ))
+
+        # Make sure we only ask to trace-cmd events that can exist, otherwise
+        # it might bail out and give nothing at all, especially with -F
+        kernel_events = {
+            event.split(':', 1)[1]
+            for event in subprocess.check_output(
+                ['trace-cmd', 'report', '-q', '-E', '--', host_path],
+                stderr=subprocess.DEVNULL,
+                universal_newlines=True,
+            ).splitlines() + subprocess.check_output(
+                ['trace-cmd', 'report', '-q', '-E', '--', guest_path],
+                stderr=subprocess.DEVNULL,
+                universal_newlines=True,
+            ).splitlines()
+        }
+        events = [event for event in events if event in kernel_events]
+
+        pre_filled_metadata = {}
+
+        kwargs.update(
+            events=events,
+            needed_metadata=needed_metadata,
+            event_parsers=event_parsers.values(),
+            default_event_parser_cls=default_event_parser_cls,
+            pre_filled_metadata=pre_filled_metadata,
+        )
+
+        cmd = [
+            'trace-cmd',
+            'report',
+            # Full accuracy on timestamp
+            '-t',
+            # All events in raw format
+            *raw_events,
+            '--align-ts',
+            '-i',
+            host_path,
+            '-i',
+            guest_path
+        ]
+
         # A fairly large buffer reduces the interaction overhead
         bufsize = 10 * 1024 * 1024
         with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=bufsize) as p:
@@ -1739,7 +1836,7 @@ class SimpleTxtTraceParser(TxtTraceParserBase):
     # Removing default_event_parser_cls restricts the API of __init__, so that
     # means that inherited alternative constructors such as from_txt_file would
     # need to be overridden to be strictly accurate too.
-    @kwargs_forwarded_to(TxtTraceParserBase.__init__, ignore=['default_event_parser_cls'])
+    @ kwargs_forwarded_to(TxtTraceParserBase.__init__, ignore=['default_event_parser_cls'])
     def __init__(self, header_regex=None, **kwargs):
         header_regex = header_regex or self.HEADER_REGEX
         self.header_regex = header_regex
@@ -1796,7 +1893,7 @@ class MetaTxtTraceParser(SimpleTxtTraceParser):
     HEADER_REGEX = r'(?P<__event>[\w@]+):?'
 
     class DEFAULT_EVENT_PARSER_CLS(TxtEventParser):
-        @classmethod
+        @ classmethod
         def _get_header_regex(cls, event):
             regex = r'^ *{__event}:?'.format(
                 __event=re.escape(event),
@@ -1938,7 +2035,7 @@ class TrappyTraceParser(TraceParserBase):
         super().__init__(events=events, **kwargs)
 
         # Lazy import so that it's not a required dependency
-        import trappy # pylint: disable=import-outside-toplevel,import-error
+        import trappy  # pylint: disable=import-outside-toplevel,import-error
 
         events = set(events)
         # Make sure we won't attempt parsing 'print' events, so that this
@@ -2224,6 +2321,8 @@ class TraceView(Loggable, TraceBase):
 # The problem is that Set expects new instances to be created by passing an
 # iterable to __init__(), but that container cannot be randomly instanciated
 # with values, it is tied to a Trace.
+
+
 class _AvailableTraceEventsSet:
     """
     Smart container that uses demand event loading on the trace to check
@@ -2232,6 +2331,7 @@ class _AvailableTraceEventsSet:
     This container can be iterated over to get the current available events,
     and supports membership tests using ``in``.
     """
+
     def __init__(self, trace):
         self._trace = trace
 
@@ -2251,7 +2351,7 @@ class _AvailableTraceEventsSet:
 
     @property
     def _available_events(self):
-        parseable = lambda: self._trace._parseable_events
+        def parseable(): return self._trace._parseable_events
 
         # Get the available events, which will populate the parseable events if
         # they were empty, which happens when a trace has just been created
@@ -2347,6 +2447,7 @@ class PandasDataDescNF:
     allowed to destroy some information (type mainly), as long as it does make
     two descriptors wrongly equal.
     """
+
     def __init__(self, nf):
         self._nf = nf
         # Since it's going to be inserted in dict for sure, precompute the hash
@@ -2434,6 +2535,7 @@ class PandasDataDescNF:
             for key, val in mapping.items()
         ))
         return cls(nf=nf)
+
 
 class PandasDataSwapEntry:
     """
@@ -3431,6 +3533,16 @@ class Trace(Loggable, TraceBase):
         write_swap=True,
     ):
         super().__init__()
+
+        if type(trace_path) in (list, tuple):
+            if len(trace_path) != 2:
+                raise ValueError('Host/Guest tuple path passed to Trace(trace_path=...) must be of length 2')
+
+            guest_path = str(trace_path[1])
+            trace_path = str(trace_path[0])
+        else:
+            guest_path = None
+
         trace_path = str(trace_path) if trace_path else None
 
         sanitization_functions = sanitization_functions or {}
@@ -3473,15 +3585,19 @@ class Trace(Loggable, TraceBase):
         self._write_swap = write_swap
         self.normalize_time = normalize_time
         self.trace_path = trace_path
+        self.guest_path = guest_path
 
         if parser is None:
             if not trace_path:
                 raise ValueError('A trace path must be provided')
 
             _, extension = os.path.splitext(trace_path)
-            if extension == '.html':
+
+            if guest_path is not None:
+                parser = TxtTraceParser.from_host_guest_dat
+            elif extension == '.html':
                 parser = SysTraceParser.from_txt_file
-            if extension == '.txt':
+            elif extension == '.txt':
                 parser = HRTxtTraceParser.from_txt_file
             else:
                 parser = TxtTraceParser.from_dat
@@ -3527,7 +3643,6 @@ class Trace(Loggable, TraceBase):
         # Update the platform info with the data available from the trace once
         # the Trace is almost fully initialized
         self.plat_info = plat_info.add_trace_src(self)
-
 
     _CACHEABLE_METADATA = {
         'time-range',
@@ -3599,6 +3714,7 @@ class Trace(Loggable, TraceBase):
         parser = self._parser
         # The parser type will potentially change the exact content in raw
         # dataframes
+
         def get_name(parser):
             return f'{parser.__module__}.{parser.__qualname__}'
 
@@ -3727,7 +3843,11 @@ class Trace(Loggable, TraceBase):
         path = self.trace_path
         events = set(events)
         needed_metadata = set(needed_metadata or [])
-        parser = self._parser(path=path, events=events, needed_metadata=needed_metadata)
+
+        if self._parser == TxtTraceParser.from_host_guest_dat:
+            parser = self._parser(path=path, events=events, needed_metadata=needed_metadata, guest_path=self.guest_path)
+        else:
+            parser = self._parser(path=path, events=events, needed_metadata=needed_metadata)
 
         # While we are at it, gather a bunch of metadata. Since we did not
         # explicitly asked for it, the parser will only give
@@ -3870,7 +3990,6 @@ class Trace(Loggable, TraceBase):
                 raw = False
             else:
                 raw = True
-
 
         if raw:
             sanitization_f = None
@@ -4246,7 +4365,6 @@ class Trace(Loggable, TraceBase):
         The names or PIDs are listed in appearance order.
         """
 
-
         # Keep only the values, in appearance order according to the timestamp
         # index
         def finalize(df, key_col, value_col, key_type, value_type):
@@ -4261,6 +4379,7 @@ class Trace(Loggable, TraceBase):
             return mapping
 
         mapping_df_list = []
+
         def _load(event, name_col, pid_col):
             df = self.df_event(event)
 
@@ -4307,18 +4426,7 @@ class Trace(Loggable, TraceBase):
         # Remove duplicated name/pid mapping and only keep the first appearance
         df = df_deduplicate(df, consecutives=False, keep='first', cols=['name', 'pid'])
 
-        forbidden_names = {
-            # <idle> is invented by trace-cmd, no event field contain this
-            # value, so it's useless (and actually harmful, since it will
-            # introduce a task that cannot be found in that trace)
-            '<idle>',
-            # This name appears when trace-cmd could not resolve the task name.
-            # Ignore it since it's not a valid name, and we probably managed
-            # to resolve it by looking at more events anyway.
-            '<...>',
-            # sched entity PELT events for task groups will get a comm="(null)"
-            '(null)',
-        }
+        forbidden_names = {}  # avidan: no forbidden names
         df = df[~df['name'].isin(forbidden_names)]
 
         name_to_pid = finalize(df, 'name', 'pid', str, int)
@@ -4593,6 +4701,7 @@ class Trace(Loggable, TraceBase):
 ###############################################################################
 
     _SANITIZATION_FUNCTIONS = {}
+
     def _sanitize_event(event, mapping=_SANITIZATION_FUNCTIONS):
         """
         Sanitization functions must not modify their input.
@@ -4612,6 +4721,7 @@ class Trace(Loggable, TraceBase):
         """
         # pylint: disable=unused-argument,no-self-use
         copied = False
+
         def copy_once(x):
             nonlocal copied
             if copied:
@@ -4638,6 +4748,7 @@ class Trace(Loggable, TraceBase):
     def _sanitize_sched_overutilized(self, event, df, aspects):
         # pylint: disable=unused-argument,no-self-use
         copied = False
+
         def copy_once(x):
             nonlocal copied
             if copied:
@@ -5117,6 +5228,7 @@ class OrTraceEventChecker(AssociativeTraceEventChecker):
 
 class _OptionalTraceEventCheckerBase(AssociativeTraceEventChecker):
     _PREFIX_STR = None
+
     def __init__(self, event_checkers=None, **kwargs):
         super().__init__(',', event_checkers, prefix_str=self._PREFIX_STR, **kwargs)
 
@@ -5517,6 +5629,7 @@ class FtraceCollector(CollectorBase, Configurable):
             'funcgraph_entry', 'funcgraph_exit',
             'print', 'bprint', 'bputs',
         }
+
         def rewrite(checker):
             if isinstance(checker, TraceEventChecker):
                 # Expand each possibly meta event into the actual underlying
@@ -5530,8 +5643,8 @@ class FtraceCollector(CollectorBase, Configurable):
                         fnmatch.filter(
                             available_events,
                             _event
-                        # If there is no match, just use the initial name and
-                        # let the rest of the code handle the missing events
+                            # If there is no match, just use the initial name and
+                            # let the rest of the code handle the missing events
                         ) or [_event]
                     )
                     if event not in avoided
@@ -5608,7 +5721,7 @@ class FtraceCollector(CollectorBase, Configurable):
         kmod_cm = None
         if needed_from_kmod and kmod_auto_load:
             try:
-                kmod, kmod_cm= self._get_kmod(
+                kmod, kmod_cm = self._get_kmod(
                     target,
                     available_events=available_events,
                     needed_events=needed_from_kmod,
@@ -5696,9 +5809,11 @@ class FtraceCollector(CollectorBase, Configurable):
 
             if record:
                 proxy = super()
+
                 class RecordCM:
                     def __enter__(self):
                         return proxy.__enter__()
+
                     def __exit__(self, *args, **kwargs):
                         return proxy.__exit__(*args, **kwargs)
 

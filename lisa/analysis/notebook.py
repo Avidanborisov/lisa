@@ -131,6 +131,7 @@ class NotebookAnalysis(TraceAnalysisBase):
                 )
 
             fields_as_cols_set = set(fields_as_cols)
+
             def make_info_row(row, event):
                 fields = field_sep.join(
                     f'{key}={value}'
@@ -150,6 +151,7 @@ class NotebookAnalysis(TraceAnalysisBase):
                         **{
                             field: df[field]
                             for field in fields_as_cols
+                            if field in df.columns
                         }
                     },
                     index=df.index,
@@ -159,7 +161,7 @@ class NotebookAnalysis(TraceAnalysisBase):
                     df['event'] = event
                 return df
 
-            df = pd.concat(map(make_info_df, events) )
+            df = pd.concat(map(make_info_df, events))
             df.sort_index(inplace=True)
             df_update_duplicates(df, inplace=True)
 
@@ -171,6 +173,11 @@ class NotebookAnalysis(TraceAnalysisBase):
                     if col.startswith('__')
                 ] +
                 (['event'] if event_as_col else []) +
+                [
+                    col
+                    for col in df.columns
+                    if not col.startswith('__') and col not in ('event', 'info')
+                ] +
                 ['info']
             )
             df = df[order_as(df.columns, columns_order)]
@@ -209,7 +216,6 @@ class NotebookAnalysis(TraceAnalysisBase):
             events = sorted(self.trace.available_events)
 
         return self._df_all_events(events=events, **kwargs)
-
 
     @TraceAnalysisBase.plot_method
     def plot_event_field(self, event: str, field: str, filter_columns=None, filter_f=None):
